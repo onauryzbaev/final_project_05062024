@@ -32,12 +32,60 @@ func main() {
 }
 
 func newsHandler(w http.ResponseWriter, r *http.Request) {
-	// Логика перенаправления запросов на сервис новостей
-	// Пример запроса на получение новостей
+	url := "http://localhost:8080/api/news/" + mux.Vars(r)["count"]
+	forwardRequest(w, r, url)
 }
 
 func addCommentHandler(w http.ResponseWriter, r *http.Request) {
-	forwardRequest(w, r, "http://localhost:8081/api/comments")
+	// Чтение тела запроса
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
+		return
+	}
+	defer r.Body.Close()
+
+	// Создание запроса на цензурирование
+	censorshipReq, err := http.NewRequest("POST", "http://localhost:8081/censorship", bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "Failed to create censorship request", http.StatusInternalServerError)
+		return
+	}
+	censorshipReq.Header = r.Header
+
+	// Отправка запроса на цензурирование
+	censorshipResp, err := http.DefaultClient.Do(censorshipReq)
+	if err != nil {
+		http.Error(w, "Failed to forward censorship request", http.StatusInternalServerError)
+		return
+	}
+	defer censorshipResp.Body.Close()
+
+	// Проверка ответа от цензуры
+	if censorshipResp.StatusCode != http.StatusOK {
+		http.Error(w, "Comment contains banned words", censorshipResp.StatusCode)
+		return
+	}
+
+	// Если прошло цензурирование, отправляем запрос на добавление комментария
+	commentsReq, err := http.NewRequest("POST", "http://localhost:8081/api/comments", bytes.NewReader(body))
+	if err != nil {
+		http.Error(w, "Failed to create comments request", http.StatusInternalServerError)
+		return
+	}
+	commentsReq.Header = r.Header
+
+	// Отправка запроса на добавление комментария
+	commentsResp, err := http.DefaultClient.Do(commentsReq)
+	if err != nil {
+		http.Error(w, "Failed to add comment", http.StatusInternalServerError)
+		return
+	}
+	defer commentsResp.Body.Close()
+
+	// Копирование ответа от сервиса комментариев в ответ клиенту
+	w.WriteHeader(commentsResp.StatusCode)
+	io.Copy(w, commentsResp.Body)
 }
 
 func deleteCommentHandler(w http.ResponseWriter, r *http.Request) {
